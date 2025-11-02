@@ -7,13 +7,9 @@ import os
 from dotenv import load_dotenv
 import re
 
-
 # Load environment variables
 load_dotenv()
-
-
 app = FastAPI(title="AI Code Review Agent")
-
 
 # CORS middleware to allow frontend requests
 app.add_middleware(
@@ -30,7 +26,6 @@ api_key = os.getenv("GROQ_API_KEY")
 print(f"✅ GROQ_API_KEY loaded: {bool(api_key)}")
 
 client = Groq(api_key=api_key)
-
 
 class CodeReviewRequest(BaseModel):
     code: str
@@ -124,6 +119,37 @@ def parse_review_response(review_text: str) -> dict:
     }
 
 
+
+
+# ==================== LOGIN ROUTES (NEW) ====================
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_login():
+    """Serve login page"""
+    try:
+        with open("../frontend/login.html", "r", encoding='utf-8') as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>❌ login.html not found</h1>")
+
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def serve_tool():
+    """Serve the tool page after login"""
+    try:
+        with open("../frontend/index.html", "r", encoding='utf-8') as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>❌ index.html not found</h1>")
+
+
+# ============================================================
+
+
+
+
 @app.post("/api/review", response_model=CodeReviewResponse)
 async def review_code(request: CodeReviewRequest):
     """Review code and provide suggestions using Groq API"""
@@ -132,14 +158,15 @@ async def review_code(request: CodeReviewRequest):
     
     focus_str = ", ".join(request.focus_areas)
     
-    # Properly format the prompt with the code
+    # Properly format the prompt with the code - FIX: Include the actual code with triple backticks
     prompt = f"""You are an expert code reviewer with 15+ years of experience. Analyze this {request.language} code and provide a detailed review.
 
 Focus on: {focus_str}
 
 Code to review:
-
-
+```{request.language}
+{request.code}
+```
 
 Provide your review in this format:
 
@@ -173,6 +200,8 @@ Provide your review in this format:
 3. [Specific suggestion 3]
 
 Be specific, cite line numbers when relevant, and provide code snippets for fixes."""
+
+
 
     try:
         print(f"\n{'='*60}")
@@ -226,15 +255,21 @@ Be specific, cite line numbers when relevant, and provide code snippets for fixe
 
 
 
+
+
 @app.post("/api/rewrite", response_model=CodeRewriteResponse)
 async def rewrite_code(request: CodeRewriteRequest):
     """Rewrite code to fix issues and improve quality"""
     if not request.code.strip():
         raise HTTPException(status_code=400, detail="Code cannot be empty")
     
+    # FIX: Include the actual code with triple backticks
     prompt = f"""You are an expert {request.language} developer. Rewrite this code to fix all issues, improve performance, security, and follow best practices.
 
 Original Code:
+```{request.language}
+{request.code}
+```
 
 Previous Review:
 {request.review}
@@ -242,6 +277,9 @@ Previous Review:
 Provide your response in this exact format:
 
 ## ✨ Rewritten Code
+```{request.language}
+[Your rewritten code here]
+```
 
 ## 📝 Explanation
 [Explain what you changed and why, in 2-3 sentences]
@@ -253,6 +291,8 @@ Provide your response in this exact format:
 - Improvement 4: [Detail]
 
 Make sure the rewritten code is production-ready, well-commented, and addresses all the issues mentioned in the review."""
+
+
 
     try:
         print(f"\n{'='*60}")
@@ -285,29 +325,29 @@ Make sure the rewritten code is production-ready, well-commented, and addresses 
         # Extract rewritten code - try multiple patterns
         rewritten_code = None
         
-        # Try pattern 1: ``````
-        code_match = re.search(r'``````', rewrite_text, re.DOTALL)
+        # Try pattern 1: ```language\n code \n```
+        code_match = re.search(r'```[\w]*\n(.*?)\n```', rewrite_text, re.DOTALL)
         if code_match:
             rewritten_code = code_match.group(1).strip()
             print(f"DEBUG: Extracted code using pattern 1 (language-specific)")
         
-        # Try pattern 2: `````` (without language)
+        # Try pattern 2: ``` code ```
         if not rewritten_code:
-            code_match = re.search(r'``````', rewrite_text, re.DOTALL)
+            code_match = re.search(r'```\n(.*?)\n```', rewrite_text, re.DOTALL)
             if code_match:
                 rewritten_code = code_match.group(1).strip()
                 print(f"DEBUG: Extracted code using pattern 2 (generic)")
         
         # Try pattern 3: Look for code between specific markers
         if not rewritten_code:
-            code_match = re.search(r'## ✨ Rewritten Code\n``````', rewrite_text, re.DOTALL)
+            code_match = re.search(r'## ✨ Rewritten Code\n```[\w]*\n(.*?)\n```', rewrite_text, re.DOTALL)
             if code_match:
                 rewritten_code = code_match.group(1).strip()
                 print(f"DEBUG: Extracted code using pattern 3 (with header)")
         
         # If still not found, extract the largest code block
         if not rewritten_code:
-            all_code_blocks = re.findall(r'``````', rewrite_text, re.DOTALL)
+            all_code_blocks = re.findall(r'```[\w]*\n(.*?)\n```', rewrite_text, re.DOTALL)
             if all_code_blocks:
                 rewritten_code = max(all_code_blocks, key=len).strip()
                 print(f"DEBUG: Extracted code using pattern 4 (largest block)")
@@ -352,6 +392,8 @@ Make sure the rewritten code is production-ready, well-commented, and addresses 
         raise HTTPException(status_code=500, detail=f"Error during code rewrite: {str(e)}")
 
 
+
+
 @app.get("/api/models")
 async def get_available_models():
     """Get list of available Groq models for code review"""
@@ -382,14 +424,6 @@ async def get_available_models():
     }
 
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_frontend():
-    """Serve the frontend HTML"""
-    try:
-        with open("../frontend/index.html", "r", encoding='utf-8') as f:
-            return HTMLResponse(content=f.read())
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1>Frontend not found. Please check frontend/index.html</h1>")
 
 
 @app.get("/health")
@@ -398,7 +432,17 @@ async def health_check():
     return {"status": "healthy", "api_key_set": bool(os.getenv("GROQ_API_KEY"))}
 
 
+
+
 if __name__ == "__main__":
     import uvicorn
+    print("\n" + "="*60)
+    print("🤖 AI Code Review & Rewrite Agent")
+    print("="*60)
+    print("✅ Login Page: http://localhost:8000")
+    print("✅ Tool Page: http://localhost:8000/app")
+    print("="*60 + "\n")
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
 
